@@ -6,97 +6,375 @@ from kivy.uix.textinput import TextInput
 from kivy.clock import Clock
 from kivy.utils import platform
 
+from jnius import autoclass, PythonJavaClass, java_method
+
+
+SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
+WRITE_UUID = "12345678-1234-5678-1234-56789abcdef1"
+NOTIFY_UUID = "12345678-1234-5678-1234-56789abcdef2"
+
+
+class ScanCallback(PythonJavaClass):
+    __javainterfaces__ = ['android/bluetooth/le/ScanCallback']
+    __javacontext__ = 'app'
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+
+    @java_method('(ILandroid/bluetooth/le/ScanResult;)V')
+    def onScanResult(self, callback_type, result):
+        Clock.schedule_once(
+            lambda dt: self.app.add_device(result), 0
+        )
+
+    @java_method('(ILjava/lang/String;)V')
+    def onScanFailed(self, error):
+        Clock.schedule_once(
+            lambda dt: self.app.set_status(
+                "فشل البحث: " + str(error)
+            ), 0
+        )
+
+
+class GattCallback(PythonJavaClass):
+    __javainterfaces__ = ['android/bluetooth/BluetoothGattCallback']
+    __javacontext__ = 'app'
+
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+
+    @java_method('(Landroid/bluetooth/BluetoothGatt;II)V')
+    def onConnectionStateChange(self, gatt, status, state):
+        Clock.schedule_once(
+            lambda dt: self.app.connection_changed(
+                gatt, status, state
+            ), 0
+        )
+
+    @java_method('(Landroid/bluetooth/BluetoothGatt;I)V')
+    def onServicesDiscovered(self, gatt, status):
+        Clock.schedule_once(
+            lambda dt: self.app.services_discovered(
+                gatt, status
+            ), 0
+        )
+
+    @java_method('(Landroid/bluetooth/BluetoothGatt;Landroid/bluetooth/BluetoothGattCharacteristic;I)V')
+    def onCharacteristicWrite(self, gatt, characteristic, status):
+        Clock.schedule_once(
+            lambda dt: self.app.write_finished(status), 0
+        )
+
+    @java_method('(Landroid/bluetooth/BluetoothGatt;Landroid/bluetooth/BluetoothGattCharacteristic;)V')
+    def onCharacteristicChanged(self, gatt, characteristic):
+        value = characteristic.getValue()
+        message = bytes(value).decode('utf-8', errors='replace')
+        Clock.schedule_once(
+            lambda dt: self.app.set_status(
+                "رسالة المستقبل: " + message
+            ), 0
+        )
+
 
 class SenderApp(App):
 
     def build(self):
         self.devices = {}
+        self.scanner = None
+        self.scan_callback = None
+        self.gatt_callback = GattCallback(self)
+        self.gatt = None
+        self.write_characteristic = None
+        self.notify_characteristic = None
+        self.connected = False
 
         root = BoxLayout(
-            orientation="vertical",
-            padding=15,
-            spacing=10
+            orientation='vertical',
+            padding=12,
+            spacing=8
         )
 
         root.add_widget(Label(
-            text="Bluetooth Sender",
-            font_size=26,
-            size_hint_y=0.12
+            text='Bluetooth Sender',
+            font_size=25,
+            size_hint_y=0.10
         ))
 
         self.status = Label(
-            text="جاهز للاتصال",
-            font_size=18,
-            size_hint_y=0.10
+            text='جاهز للبحث عن المستقبل',
+            font_size=17,
+            size_hint_y=0.12
         )
         root.add_widget(self.status)
 
-        search_button = Button(
-            text="البحث عن المستقبل",
-            font_size=20,
+        search = Button(
+            text='البحث عن أجهزة BLE',
             size_hint_y=0.12
         )
-        search_button.bind(on_press=self.search_devices)
-        root.add_widget(search_button)
+        search.bind(on_press=self.search_devices)
+        root.add_widget(search)
 
         self.device_list = BoxLayout(
-            orientation="vertical",
-            spacing=5
+            orientation='vertical',
+            spacing=5,
+            size_hint_y=0.30
         )
         root.add_widget(self.device_list)
 
         self.text_input = TextInput(
-            hint_text="اكتب النص العربي أو الإنجليزي",
+            hint_text='اكتب النص العربي أو الإنجليزي',
             multiline=True,
-            font_size=22,
+            font_size=21,
             size_hint_y=0.25
         )
         root.add_widget(self.text_input)
 
-        self.send_button = Button(
-            text="إرسال النص",
-            font_size=20,
+        send = Button(
+            text='إرسال النص',
             size_hint_y=0.12
         )
-        self.send_button.bind(on_press=self.send_text)
-        root.add_widget(self.send_button)
+        send.bind(on_press=self.send_text)
+        root.add_widget(send)
+
+        disconnect = Button(
+            text='قطع الاتصال',
+            size_hint_y=0.09
+        )
+        disconnect.bind(on_press=self.disconnect)
+        root.add_widget(disconnect)
 
         return root
 
+    def set_status(self, message):
+        self.status.text = message
+
     def search_devices(self, instance):
-        if platform != "android":
-            self.status.text = "يتطلب هاتف أندرويد"
+        if platform != 'android':
+            self.set_status('يتطلب هاتف أندرويد')
             return
 
         try:
             from android.permissions import request_permissions
 
-            self.status.text = "طلب صلاحيات البلوتوث..."
+            permissions = [
+                'android.permission.ACCESS_FINE_LOCATION'
+            ]
 
-            request_permissions([
-                "android.permission.BLUETOOTH",
-                "android.permission.BLUETOOTH_ADMIN",
-                "android.permission.ACCESS_FINE_LOCATION"
-            ], self.permissions_result)
+            if autoclass('android.os.Build$VERSION').SDK_INT >= 31:
+                permissions.extend([
+                    'android.permission.BLUETOOTH_SCAN',
+                    'android.permission.BLUETOOTH_CONNECT'
+                ])
+
+            request_permissions(
+                permissions,
+                self.permission_result
+            )
 
         except Exception as error:
-            self.status.text = "خطأ: " + str(error)
+            self.set_status('خطأ الصلاحيات: ' + str(error))
 
-    def permissions_result(self, permissions, grants):
+    def permission_result(self, permissions, grants):
         if not all(grants):
-            self.status.text = "يجب السماح بالصلاحيات"
+            self.set_status('يجب السماح بالصلاحيات')
             return
 
-        self.status.text = "تم منح الصلاحيات"
+        Clock.schedule_once(self.start_scan, 0)
+
+    def start_scan(self, dt):
+        try:
+            BluetoothAdapter = autoclass(
+                'android.bluetooth.BluetoothAdapter'
+            )
+
+            self.adapter = BluetoothAdapter.getDefaultAdapter()
+
+            if self.adapter is None or not self.adapter.isEnabled():
+                self.set_status('فعّل البلوتوث أولاً')
+                return
+
+            self.scanner = self.adapter.getBluetoothLeScanner()
+
+            if self.scanner is None:
+                self.set_status('ماسح BLE غير متاح')
+                return
+
+            self.devices.clear()
+            self.device_list.clear_widgets()
+
+            self.scan_callback = ScanCallback(self)
+
+            self.set_status('جارٍ البحث لمدة 12 ثانية...')
+
+            self.scanner.startScan(self.scan_callback)
+
+            Clock.schedule_once(self.stop_scan, 12)
+
+        except Exception as error:
+            self.set_status('خطأ البحث: ' + str(error))
+
+    def add_device(self, result):
+        try:
+            device = result.getDevice()
+            address = device.getAddress()
+
+            if address in self.devices:
+                return
+
+            name = device.getName() or 'جهاز غير معروف'
+            self.devices[address] = device
+
+            button = Button(
+                text=name + '\n' + address,
+                size_hint_y=None,
+                height=65
+            )
+
+            button.bind(
+                on_press=lambda instance:
+                self.connect_device(address)
+            )
+
+            self.device_list.add_widget(button)
+
+        except Exception:
+            pass
+
+    def stop_scan(self, dt):
+        try:
+            if self.scanner and self.scan_callback:
+                self.scanner.stopScan(self.scan_callback)
+
+            self.set_status(
+                'اختر المستقبل من القائمة'
+                if self.devices else
+                'لم يتم العثور على أجهزة'
+            )
+
+        except Exception as error:
+            self.set_status(str(error))
+
+    def connect_device(self, address):
+        try:
+            if self.scanner and self.scan_callback:
+                self.scanner.stopScan(self.scan_callback)
+
+            device = self.devices[address]
+
+            activity = autoclass(
+                'org.kivy.android.PythonActivity'
+            ).mActivity
+
+            self.set_status('جارٍ الاتصال...')
+            self.gatt = device.connectGatt(
+                activity,
+                False,
+                self.gatt_callback
+            )
+
+        except Exception as error:
+            self.set_status('خطأ الاتصال: ' + str(error))
+
+    def connection_changed(self, gatt, status, state):
+        if status != 0:
+            self.set_status('فشل الاتصال: ' + str(status))
+            return
+
+        if state == 2:
+            self.set_status('متصل، اكتشاف الخدمات...')
+            gatt.discoverServices()
+
+        elif state == 0:
+            self.connected = False
+            self.write_characteristic = None
+            self.set_status('انقطع الاتصال')
+
+    def services_discovered(self, gatt, status):
+        if status != 0:
+            self.set_status('فشل اكتشاف الخدمات')
+            return
+
+        UUID = autoclass('java.util.UUID')
+
+        service = gatt.getService(
+            UUID.fromString(SERVICE_UUID)
+        )
+
+        if service is None:
+            self.set_status('خدمة المستقبل غير موجودة')
+            return
+
+        self.write_characteristic = service.getCharacteristic(
+            UUID.fromString(WRITE_UUID)
+        )
+
+        self.notify_characteristic = service.getCharacteristic(
+            UUID.fromString(NOTIFY_UUID)
+        )
+
+        if self.write_characteristic is None:
+            self.set_status('خاصية استقبال النص غير موجودة')
+            return
+
+        self.connected = True
+        self.set_status('تم الاتصال وتجهيز إرسال النصوص')
 
     def send_text(self, instance):
-        text = self.text_input.text.strip()
-
-        if not text:
-            self.status.text = "اكتب نصاً أولاً"
+        if not self.connected or self.write_characteristic is None:
+            self.set_status('اتصل بالمستقبل أولاً')
             return
 
-        self.status.text = "النص جاهز للإرسال عبر BLE"
+        text = self.text_input.text
+
+        if not text.strip():
+            self.set_status('اكتب نصاً أولاً')
+            return
+
+        try:
+            data = text.encode('utf-8')
+
+            if len(data) > 180:
+                self.set_status(
+                    'النص طويل؛ سنضيف تقسيم البيانات لاحقاً'
+                )
+                return
+
+            self.write_characteristic.setValue(data)
+
+            result = self.gatt.writeCharacteristic(
+                self.write_characteristic
+            )
+
+            self.set_status(
+                'تم طلب إرسال النص'
+                if result else
+                'تعذر بدء الإرسال'
+            )
+
+        except Exception as error:
+            self.set_status('خطأ الإرسال: ' + str(error))
+
+    def write_finished(self, status):
+        if status == 0:
+            self.set_status('اكتمل إرسال النص')
+        else:
+            self.set_status('فشل إرسال النص: ' + str(status))
+
+    def disconnect(self, instance):
+        try:
+            if self.gatt:
+                self.gatt.disconnect()
+                self.gatt.close()
+
+            self.gatt = None
+            self.connected = False
+            self.write_characteristic = None
+            self.set_status('تم قطع الاتصال')
+
+        except Exception as error:
+            self.set_status(str(error))
 
 
 SenderApp().run()

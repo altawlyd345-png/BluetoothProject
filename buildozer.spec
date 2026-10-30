@@ -12,7 +12,7 @@ title = Bluetooth Sender
 package.name = bluetoothsender
 
 # (str) Package domain (needed for android/ios packaging)
-package.domain = org.example
+package.domain = org.bluetoothproject
 
 # (str) Source code where the main.py live
 source.dir = .
@@ -108,7 +108,7 @@ android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_CONNECT,BLUETOOTH_SCAN
 #android.features = android.hardware.usb.host
 
 # (int) Target Android API, should be as high as possible.
-#android.api = 33
+#android.api = 35
 
 # (int) Minimum API your APK / AAB will support.
 #android.minapi = 24

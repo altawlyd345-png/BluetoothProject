@@ -21,7 +21,9 @@ android.ndk = 27b
 
 android.archs = arm64-v8a
 
-android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,ACCESS_FINE_LOCATION
+android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,ACCESS_FINE_LOCATION,BLUETOOTH_SCAN,BLUETOOTH_CONNECT
+
+android.add_src = src/main/java
 
 android.allow_backup = True
 android.private_storage = True

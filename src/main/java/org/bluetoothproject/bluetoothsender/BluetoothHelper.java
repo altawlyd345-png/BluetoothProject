@@ -8,40 +8,48 @@ import android.bluetooth.BluetoothGattCharacteristic;
 
 public class BluetoothHelper {
 
-public static abstract class Scanner extends ScanCallback {
-    public abstract void onDeviceFound(ScanResult result);
-    public abstract void onScanError(int error);
-
-    @Override
-    public void onScanResult(int callbackType, ScanResult result) {
-        onDeviceFound(result);
-    }
-
-    @Override
-    public void onScanFailed(int errorCode) {
-        onScanError(errorCode);
-    }
+public interface ScanListener {
+    void onDeviceFound(ScanResult result);
+    void onScanError(int error);
 }
 
-public static abstract class Gatt extends BluetoothGattCallback {
-    public abstract void onConnection(BluetoothGatt gatt, int status, int state);
-    public abstract void onServices(BluetoothGatt gatt, int status);
-    public abstract void onWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status);
+public interface GattListener {
+    void onConnection(BluetoothGatt gatt, int status, int state);
+    void onServices(BluetoothGatt gatt, int status);
+    void onWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status);
+}
 
-    @Override
-    public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-        onConnection(gatt, status, newState);
-    }
+public static ScanCallback createScanner(final ScanListener listener) {
+    return new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            listener.onDeviceFound(result);
+        }
 
-    @Override
-    public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-        onServices(gatt, status);
-    }
+        @Override
+        public void onScanFailed(int errorCode) {
+            listener.onScanError(errorCode);
+        }
+    };
+}
 
-    @Override
-    public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
-        onWrite(gatt, characteristic, status);
-    }
+public static BluetoothGattCallback createGattCallback(final GattListener listener) {
+    return new BluetoothGattCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            listener.onConnection(gatt, status, newState);
+        }
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            listener.onServices(gatt, status);
+        }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            listener.onWrite(gatt, characteristic, status);
+        }
+    };
 }
 
 }
